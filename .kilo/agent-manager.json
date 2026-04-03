@@ -1,0 +1,16 @@
+{
+  "worktrees": {
+    "wt-1775253072032-1": {
+      "branch": "handy-match",
+      "path": "c:\\Users\\Markus\\dev\\playtech\\mamarrbot\\.kilo\\worktrees\\handy-match",
+      "parentBranch": "master",
+      "createdAt": "2026-04-03T21:51:12.032Z"
+    }
+  },
+  "sessions": {
+    "ses_2aaabd60bffeHvHJV1jUHBfhQU": {
+      "worktreeId": "wt-1775253072032-1",
+      "createdAt": "2026-04-03T21:51:12.381Z"
+    }
+  }
+}
