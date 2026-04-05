@@ -39,6 +39,13 @@ public final class BidDiagnostics {
                 "Pacing diagnostics: "
                         + "phase=" + currentSpendPhase(state)
                         + ", "
+                        + "pressure=" + state.crowdingPressure
+                        + ", entered=" + state.lastBlockEnteredWithBid
+                        + ", wins=" + state.lastBlockWins
+                        + ", losses=" + state.lastBlockLossesWithBid
+                        + ", winRate=" + format3(state.lastBlockWinRate)
+                        + ", avgWinCost=" + format3(state.lastBlockAvgWinCost)
+                        + ", "
                         + "band=" + state.paceBand
                         + ", lagRatio=" + format3(state.lastLagRatio)
                         + ", targetSpent=" + targetSoFar

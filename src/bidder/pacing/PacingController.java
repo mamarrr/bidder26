@@ -1,6 +1,7 @@
 package bidder.pacing;
 
 import static bidder.config.BidStrategyConfig.CONTROL_STEP;
+import static bidder.config.BidStrategyConfig.EARLY_RED_HIGH_PRESSURE_LAG_RATIO;
 import static bidder.config.BidStrategyConfig.EARLY_RED_ROUND_GUARD;
 import static bidder.config.BidStrategyConfig.FLOOR_SPEND_RATIO;
 import static bidder.config.BidStrategyConfig.GREEN_LAG_RATIO;
@@ -62,7 +63,11 @@ public final class PacingController {
         }
 
         if (state.roundsSeen < EARLY_RED_ROUND_GUARD && state.paceBand == PaceBand.RED) {
-            state.paceBand = PaceBand.ORANGE;
+            boolean allowEarlyRed = state.crowdingPressure == CrowdingPressure.HIGH
+                    && lagRatio >= EARLY_RED_HIGH_PRESSURE_LAG_RATIO;
+            if (!allowEarlyRed) {
+                state.paceBand = PaceBand.ORANGE;
+            }
         }
 
         if (state.trackedSpent >= nearFloorBudget && state.paceBand == PaceBand.RED) {
@@ -87,16 +92,16 @@ public final class PacingController {
                 targetPace = 0.98;
                 break;
             case YELLOW:
-                targetShift = -0.03;
-                targetPace = 1.03;
+                targetShift = -0.05;
+                targetPace = 1.05;
                 break;
             case ORANGE:
-                targetShift = -0.19;
-                targetPace = 1.14;
+                targetShift = -0.22;
+                targetPace = 1.17;
                 break;
             case RED:
-                targetShift = -0.30;
-                targetPace = 1.22;
+                targetShift = -0.33;
+                targetPace = 1.25;
                 break;
             default:
                 targetShift = 0.0;
@@ -153,6 +158,21 @@ public final class PacingController {
     }
 
     private static void evaluateBlockPacing(BidRuntimeState state) {
+        int enteredWithBid = state.blockEnteredWithBid;
+        int wins = state.blockWins;
+        int lossesWithBid = state.blockLossesWithBid;
+        double winRate = enteredWithBid <= 0 ? 0.0 : (double) wins / (double) enteredWithBid;
+        double avgWinCost = state.blockWinCostCount <= 0
+                ? 0.0
+                : (double) state.blockWinCostSum / (double) state.blockWinCostCount;
+
+        state.lastBlockEnteredWithBid = enteredWithBid;
+        state.lastBlockWins = wins;
+        state.lastBlockLossesWithBid = lossesWithBid;
+        state.lastBlockWinRate = winRate;
+        state.lastBlockAvgWinCost = avgWinCost;
+        state.crowdingPressure = classifyCrowdingPressure(enteredWithBid, winRate);
+
         double participationRate = (double) state.blockEnteredRounds / 100.0;
         state.lastBlockParticipationRate = participationRate;
 
@@ -184,6 +204,11 @@ public final class PacingController {
 
         state.blockRounds = 0;
         state.blockEnteredRounds = 0;
+        state.blockEnteredWithBid = 0;
+        state.blockWins = 0;
+        state.blockLossesWithBid = 0;
+        state.blockWinCostSum = 0;
+        state.blockWinCostCount = 0;
         state.lastEvaluatedBlockSpend = state.blockSpentByResults;
         state.blockSpentByResults = 0;
 
@@ -204,6 +229,16 @@ public final class PacingController {
             return 210;
         }
         return 175;
+    }
+
+    private static CrowdingPressure classifyCrowdingPressure(int entered, double winRate) {
+        if (entered < 15 || winRate >= 0.18) {
+            return CrowdingPressure.LOW;
+        }
+        if (winRate >= 0.08) {
+            return CrowdingPressure.MEDIUM;
+        }
+        return CrowdingPressure.HIGH;
     }
 
     private static PaceBand increaseBand(PaceBand band) {

@@ -6,7 +6,7 @@ import static bidder.config.BidStrategyConfig.SUB_WEIGHT;
 import static bidder.config.BidStrategyConfig.SYNERGY_WEIGHT;
 import static bidder.config.BidStrategyConfig.VIEW_WEIGHT;
 
-//import bidder.diagnostics.BidDiagnostics;
+import bidder.diagnostics.BidDiagnostics;
 import bidder.pacing.PacingController;
 import bidder.policy.BidAdjustmentPolicy;
 import bidder.policy.BidSanitizer;
@@ -28,7 +28,9 @@ public class BidCalculator {
 
     public Bid calculateBid(DataParserResult data) {
         if (data == null || data.video() == null || data.viewer() == null) {
-            return new Bid(0, 0);
+            Bid noBid = new Bid(0, 0);
+            STATE.lastDecidedBid = noBid;
+            return noBid;
         }
 
         PacingController.refreshPacingControls(STATE);
@@ -110,11 +112,24 @@ public class BidCalculator {
         startBid = premiumBid.startBid();
         maxBid = premiumBid.maxBid();
 
+        Bid competitionPressureBid = BidAdjustmentPolicy.applyCompetitionPressureBoost(
+                STATE,
+                new Bid(startBid, maxBid),
+                totalScore,
+                matchScore,
+                engagementScore,
+                video,
+                viewer
+        );
+        startBid = competitionPressureBid.startBid();
+        maxBid = competitionPressureBid.maxBid();
+
         startBid = (int) Math.floor(startBid * STATE.paceMultiplier);
         maxBid = (int) Math.floor(maxBid * STATE.paceMultiplier);
 
         Bid safeBid = BidSanitizer.sanitizeBid(startBid, maxBid, STATE.remainingBudget);
-        //BidDiagnostics.updateDecisionDiagnostics(STATE, tailScore, safeBid);
+        STATE.lastDecidedBid = safeBid;
+        BidDiagnostics.updateDecisionDiagnostics(STATE, totalScore, safeBid);
         PacingController.updatePacingState(STATE, safeBid);
 
         return safeBid;
@@ -129,14 +144,25 @@ public class BidCalculator {
     }
 
     public void onBidResult(boolean won, int ebucksSpent) {
-        if (ebucksSpent <= 0) {
-            return;
+        if (STATE.lastDecidedBid.maxBid() > 0) {
+            STATE.blockEnteredWithBid++;
+            if (won) {
+                STATE.blockWins++;
+                if (ebucksSpent > 0) {
+                    STATE.blockWinCostSum += ebucksSpent;
+                    STATE.blockWinCostCount++;
+                }
+            } else {
+                STATE.blockLossesWithBid++;
+            }
         }
 
-        STATE.trackedSpent += ebucksSpent;
-        STATE.blockSpentByResults += ebucksSpent;
-        if (STATE.trackedSpent < 0) {
-            STATE.trackedSpent = Integer.MAX_VALUE;
+        if (ebucksSpent > 0) {
+            STATE.trackedSpent += ebucksSpent;
+            STATE.blockSpentByResults += ebucksSpent;
+            if (STATE.trackedSpent < 0) {
+                STATE.trackedSpent = Integer.MAX_VALUE;
+            }
         }
     }
 
@@ -150,7 +176,7 @@ public class BidCalculator {
 
         // Re-evaluate controls at summary boundaries where spend signal quality is highest.
         PacingController.refreshPacingControls(STATE);
-        //BidDiagnostics.logPacingDiagnostics(STATE, blockPoints, blockSpent);
-        //BidDiagnostics.resetBlockDiagnostics(STATE);
+        BidDiagnostics.logPacingDiagnostics(STATE, blockPoints, blockSpent);
+        BidDiagnostics.resetBlockDiagnostics(STATE);
     }
 }

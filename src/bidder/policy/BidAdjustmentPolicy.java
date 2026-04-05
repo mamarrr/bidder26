@@ -8,6 +8,7 @@ import static bidder.config.BidStrategyConfig.ORANGE_LAG_RATIO;
 import static bidder.config.BidStrategyConfig.TARGET_ROUNDS_TO_HIT_FLOOR;
 import static bidder.pacing.PacingController.floorBudget;
 
+import bidder.pacing.CrowdingPressure;
 import bidder.pacing.PaceBand;
 import bidder.state.BidRuntimeState;
 import domain.Bid;
@@ -18,6 +19,9 @@ import domain.viewer.ViewerInterests;
 import domain.viewer.ViewerSubscribed;
 
 public final class BidAdjustmentPolicy {
+
+    private static final double MEDIUM_PRESSURE_START_RATIO = 0.60;
+    private static final double HIGH_PRESSURE_START_RATIO = 0.72;
 
     private BidAdjustmentPolicy() {
     }
@@ -37,30 +41,31 @@ public final class BidAdjustmentPolicy {
                 break;
             case YELLOW:
                 if (adjustedMax > 0) {
-                    adjustedMax += 1;
+                    adjustedStart += 1;
+                    adjustedMax += 2;
                 }
                 break;
             case ORANGE:
                 if (adjustedMax > 0) {
                     if (matchScore >= MATCH_VIDEO_WEIGHT) {
-                        adjustedStart += 1;
-                        adjustedMax += 3;
+                        adjustedStart += 2;
+                        adjustedMax += 4;
                     } else {
-                        adjustedMax += 1;
+                        adjustedMax += 2;
                     }
                 }
                 break;
             case RED:
                 if (adjustedMax > 0) {
                     if (matchScore >= MATCH_VIDEO_WEIGHT) {
-                        adjustedStart += 2;
-                        adjustedMax += 5;
+                        adjustedStart += 3;
+                        adjustedMax += 6;
                     } else {
-                        adjustedMax += 2;
+                        adjustedMax += 3;
                     }
                 } else if (score >= 4.55 && matchScore >= MIN_MATCH_SCORE_FOR_LAG_BID) {
-                    adjustedStart = 1;
-                    adjustedMax = 5;
+                    adjustedStart = 2;
+                    adjustedMax = 6;
                 }
                 break;
             default:
@@ -133,24 +138,24 @@ public final class BidAdjustmentPolicy {
                     && state.lastLagRatio >= ORANGE_LAG_RATIO
                     && matchScore >= MATCH_VIDEO_WEIGHT
                     && score >= 7.4) {
-                adjustedStart += 2;
-                adjustedMax += 6;
+                adjustedStart += 3;
+                adjustedMax += 7;
             }
 
             if (state.paceBand == PaceBand.ORANGE
                     && state.lastLagRatio >= 0.20
                     && matchScore >= MATCH_VIDEO_WEIGHT
                     && score >= 7.2) {
-                adjustedStart += 1;
-                adjustedMax += 3;
+                adjustedStart += 2;
+                adjustedMax += 4;
             }
 
             if (state.paceBand == PaceBand.RED
                     && state.lowSpendCatchUpBlocks >= 2
                     && matchScore >= MATCH_VIDEO_WEIGHT
                     && score >= 6.2) {
-                adjustedStart += 1;
-                adjustedMax += 2;
+                adjustedStart += 2;
+                adjustedMax += 3;
             }
 
             return new Bid(adjustedStart, adjustedMax);
@@ -169,20 +174,29 @@ public final class BidAdjustmentPolicy {
             return filteredBid;
         }
 
-        boolean mediumMatchSignal = matchScore >= 0.32 && score >= 4.95;
+        boolean highPressure = state.crowdingPressure == CrowdingPressure.HIGH;
+        boolean mediumMatchSignal = matchScore >= (highPressure ? 0.24 : 0.32)
+                && score >= (highPressure ? 4.65 : 4.95);
         boolean qualityFallbackSignal = viewer.subscribed() == ViewerSubscribed.Y
-                && engagementScore >= 1.0
-                && score >= 4.8;
+                && engagementScore >= (highPressure ? 0.92 : 1.0)
+                && score >= (highPressure ? 4.6 : 4.8);
 
         if (!mediumMatchSignal && !qualityFallbackSignal) {
             return filteredBid;
         }
 
-        if (state.lastLagRatio >= 0.55 || state.lowSpendCatchUpBlocks >= 3) {
-            return new Bid(2, 8);
+        if (highPressure) {
+            if (state.lastLagRatio >= 0.55 || state.lowSpendCatchUpBlocks >= 3) {
+                return new Bid(4, 14);
+            }
+            return new Bid(3, 11);
         }
 
-        return new Bid(1, 6);
+        if (state.lastLagRatio >= 0.55 || state.lowSpendCatchUpBlocks >= 3) {
+            return new Bid(3, 10);
+        }
+
+        return new Bid(2, 7);
     }
 
     public static Bid applySpendPhasePolicy(
@@ -201,11 +215,11 @@ public final class BidAdjustmentPolicy {
                 int adjustedMax = bid.maxBid();
 
                 if (matchScore >= MATCH_VIDEO_WEIGHT || score >= 6.4) {
-                    adjustedStart += 2;
-                    adjustedMax += 4;
+                    adjustedStart += 3;
+                    adjustedMax += 5;
                 } else if (score >= 5.2 || engagementScore >= 1.0) {
-                    adjustedStart += 1;
-                    adjustedMax += 2;
+                    adjustedStart += 2;
+                    adjustedMax += 3;
                 }
 
                 return new Bid(adjustedStart, adjustedMax);
@@ -213,14 +227,25 @@ public final class BidAdjustmentPolicy {
 
             Category[] interests = extractInterests(viewer.interests());
             boolean topInterestMatch = interests.length > 0 && interests[0] == CHOSEN_CATEGORY;
+            boolean highPressure = state.crowdingPressure == CrowdingPressure.HIGH;
             boolean relaxedCandidate = score >= 4.9
                     && (matchScore >= 0.30 || topInterestMatch || viewer.subscribed() == ViewerSubscribed.Y);
+            boolean highPressureMidQualityCandidate = highPressure
+                    && state.lastLagRatio >= ORANGE_LAG_RATIO
+                    && score >= 4.55
+                    && (matchScore >= 0.24 || engagementScore >= 0.95 || viewer.subscribed() == ViewerSubscribed.Y);
 
-            if (relaxedCandidate) {
-                if (state.lastLagRatio >= ORANGE_LAG_RATIO) {
-                    return new Bid(2, 8);
+            if (relaxedCandidate || highPressureMidQualityCandidate) {
+                if (highPressure) {
+                    if (state.lastLagRatio >= 0.50) {
+                        return new Bid(4, 13);
+                    }
+                    return new Bid(3, 10);
                 }
-                return new Bid(1, 6);
+                if (state.lastLagRatio >= ORANGE_LAG_RATIO) {
+                    return new Bid(3, 10);
+                }
+                return new Bid(2, 7);
             }
 
             return bid;
@@ -242,6 +267,54 @@ public final class BidAdjustmentPolicy {
         }
 
         return bid;
+    }
+
+    public static Bid applyCompetitionPressureBoost(
+            BidRuntimeState state,
+            Bid bid,
+            double score,
+            double matchScore,
+            double engagementScore,
+            Video video,
+            Viewer viewer
+    ) {
+        if (bid.maxBid() <= 0 || state.trackedSpent >= floorBudget(state) || state.crowdingPressure == CrowdingPressure.LOW) {
+            return bid;
+        }
+
+        int adjustedStart = bid.startBid();
+        int adjustedMax = bid.maxBid();
+        boolean premiumRound = isPremiumRound(video, viewer, engagementScore);
+
+        if (state.crowdingPressure == CrowdingPressure.MEDIUM) {
+            if (score >= 7.4 || matchScore >= MATCH_VIDEO_WEIGHT) {
+                adjustedMax += 4;
+            } else if (score >= 6.2) {
+                adjustedMax += 3;
+            } else {
+                adjustedMax += 2;
+            }
+            adjustedStart = enforceStartRatio(adjustedStart, adjustedMax, MEDIUM_PRESSURE_START_RATIO);
+        } else {
+            if (premiumRound) {
+                adjustedMax += score >= 7.4 ? 10 : 8;
+                adjustedStart = Math.max(adjustedStart, adjustedMax - 1);
+            } else {
+                if (score >= 7.6 || matchScore >= MATCH_VIDEO_WEIGHT) {
+                    adjustedMax += 8;
+                } else if (score >= 6.5) {
+                    adjustedMax += 6;
+                } else {
+                    adjustedMax += 4;
+                }
+                adjustedStart = enforceStartRatio(adjustedStart, adjustedMax, HIGH_PRESSURE_START_RATIO);
+            }
+        }
+
+        if (adjustedStart > adjustedMax) {
+            adjustedStart = adjustedMax;
+        }
+        return new Bid(adjustedStart, adjustedMax);
     }
 
     public static Bid applyMinimalLateCatchUp(
@@ -328,5 +401,10 @@ public final class BidAdjustmentPolicy {
             return new Category[0];
         }
         return viewerInterests.interests();
+    }
+
+    private static int enforceStartRatio(int startBid, int maxBid, double minRatio) {
+        int minStartBid = (int) Math.ceil((double) maxBid * minRatio);
+        return Math.max(startBid, minStartBid);
     }
 }

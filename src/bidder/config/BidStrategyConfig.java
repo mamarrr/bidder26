@@ -34,13 +34,14 @@ public final class BidStrategyConfig {
     public static final int MAX_REASONABLE_BID = 250;
     public static final double FLOOR_SPEND_RATIO = 0.30;
     public static final double INTERNAL_TARGET_BUFFER_RATIO = 1.03;
-    public static final int TARGET_ROUNDS_TO_HIT_FLOOR = 90_000;
+    public static final int TARGET_ROUNDS_TO_HIT_FLOOR = 70_000;
 
     public static final double GREEN_LAG_RATIO = 0.025;
     public static final double YELLOW_LAG_RATIO = 0.11;
     public static final double ORANGE_LAG_RATIO = 0.27;
 
     public static final int EARLY_RED_ROUND_GUARD = 18_000;
+    public static final double EARLY_RED_HIGH_PRESSURE_LAG_RATIO = 0.34;
     public static final double CONTROL_STEP = 0.04;
 
     public static final double TARGET_SPEND_LOWER_GUARD_RATIO = 0.305;

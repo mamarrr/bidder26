@@ -1,6 +1,7 @@
 package bidder.state;
 
 import bidder.pacing.PaceBand;
+import bidder.pacing.CrowdingPressure;
 import domain.Bid;
 
 public class BidRuntimeState {
@@ -13,6 +14,11 @@ public class BidRuntimeState {
 
     public int blockRounds = 0;
     public int blockEnteredRounds = 0;
+    public int blockEnteredWithBid = 0;
+    public int blockWins = 0;
+    public int blockLossesWithBid = 0;
+    public int blockWinCostSum = 0;
+    public int blockWinCostCount = 0;
     public int blockSpentByResults = 0;
     public int lastEvaluatedBlockSpend = 0;
     public int consecutiveLagBlocks = 0;
@@ -24,6 +30,12 @@ public class BidRuntimeState {
     public int blockBidEnteredCount = 0;
 
     public double lastBlockParticipationRate = 0.0;
+    public int lastBlockEnteredWithBid = 0;
+    public int lastBlockWins = 0;
+    public int lastBlockLossesWithBid = 0;
+    public double lastBlockWinRate = 0.0;
+    public double lastBlockAvgWinCost = 0.0;
+    public CrowdingPressure crowdingPressure = CrowdingPressure.LOW;
     public double lastLagRatio = 0.0;
     public double lastTailScore = 0.0;
     public Bid lastDecidedBid = new Bid(0, 0);
