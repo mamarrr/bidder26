@@ -5,6 +5,18 @@ import static bidder.config.BidStrategyConfig.EARLY_RED_HIGH_PRESSURE_LAG_RATIO;
 import static bidder.config.BidStrategyConfig.EARLY_RED_ROUND_GUARD;
 import static bidder.config.BidStrategyConfig.FLOOR_SPEND_RATIO;
 import static bidder.config.BidStrategyConfig.GREEN_LAG_RATIO;
+import static bidder.config.BidStrategyConfig.HQ_OUTBID_EXTRA_TARGET_PACE;
+import static bidder.config.BidStrategyConfig.HQ_OUTBID_EXTRA_TARGET_SHIFT;
+import static bidder.config.BidStrategyConfig.HQ_OUTBID_MAX_WIN_RATE;
+import static bidder.config.BidStrategyConfig.HQ_OUTBID_MIN_ENTERED;
+import static bidder.config.BidStrategyConfig.HQ_OUTBID_MIN_GOOD_ENTRY_RATE;
+import static bidder.config.BidStrategyConfig.HQ_OUTBID_MIN_STAGE_FOR_EXTRA_PACE;
+import static bidder.config.BidStrategyConfig.HQ_OUTBID_MIN_STAGE_FOR_ORANGE_BAND;
+import static bidder.config.BidStrategyConfig.HQ_OUTBID_RECOVERY_STREAK_BLOCKS_TO_RESET;
+import static bidder.config.BidStrategyConfig.HQ_OUTBID_RECOVERY_WIN_RATE;
+import static bidder.config.BidStrategyConfig.HQ_OUTBID_SEVERE_ZERO_WIN_MIN_ENTERED;
+import static bidder.config.BidStrategyConfig.HQ_OUTBID_STAGE_CAP;
+import static bidder.config.BidStrategyConfig.HQ_OUTBID_STRONG_RECOVERY_WIN_RATE;
 import static bidder.config.BidStrategyConfig.INTERNAL_TARGET_BUFFER_RATIO;
 import static bidder.config.BidStrategyConfig.NEAR_FLOOR_STABILITY_RATIO;
 import static bidder.config.BidStrategyConfig.ORANGE_LAG_RATIO;
@@ -15,6 +27,7 @@ import static bidder.config.BidStrategyConfig.TARGET_SPEND_UPPER_GUARD_RATIO;
 import static bidder.config.BidStrategyConfig.YELLOW_EXIT_SPEND_LAG_RATIO_OF_FLOOR;
 import static bidder.config.BidStrategyConfig.YELLOW_LAG_RATIO;
 
+import bidder.diagnostics.RoundQualityBucket;
 import bidder.state.BidRuntimeState;
 import domain.Bid;
 
@@ -49,6 +62,7 @@ public final class PacingController {
         double lagRatio = (double) spendLag / (double) Math.max(1, targetBudget);
         state.lastLagRatio = lagRatio;
         int nearFloorBudget = (int) Math.ceil((double) floorBudget * NEAR_FLOOR_STABILITY_RATIO);
+        boolean preFloor = state.trackedSpent < floorBudget;
 
         if (state.trackedSpent >= floorBudget) {
             state.paceBand = PaceBand.GREEN;
@@ -83,6 +97,12 @@ public final class PacingController {
             state.paceBand = increaseBand(state.paceBand);
         }
 
+        if (preFloor
+                && state.highQualityOutbidStage >= HQ_OUTBID_MIN_STAGE_FOR_ORANGE_BAND
+                && state.paceBand.ordinal() < PaceBand.ORANGE.ordinal()) {
+            state.paceBand = PaceBand.ORANGE;
+        }
+
         double targetShift;
         double targetPace;
 
@@ -109,17 +129,22 @@ public final class PacingController {
                 break;
         }
 
-        if (state.paceBand == PaceBand.RED && state.trackedSpent < floorBudget && state.lowSpendCatchUpBlocks >= 2) {
+        if (state.paceBand == PaceBand.RED && preFloor && state.lowSpendCatchUpBlocks >= 2) {
             targetShift -= 0.05;
             targetPace += 0.04;
         }
-        if (state.paceBand == PaceBand.RED && state.trackedSpent < floorBudget && state.lowSpendCatchUpBlocks >= 4) {
+        if (state.paceBand == PaceBand.RED && preFloor && state.lowSpendCatchUpBlocks >= 4) {
             targetShift -= 0.04;
             targetPace += 0.03;
         }
-        if (state.paceBand == PaceBand.ORANGE && state.trackedSpent < floorBudget && spendLag > yellowExitLag) {
+        if (state.paceBand == PaceBand.ORANGE && preFloor && spendLag > yellowExitLag) {
             targetShift -= 0.03;
             targetPace += 0.02;
+        }
+
+        if (preFloor && state.highQualityOutbidStage >= HQ_OUTBID_MIN_STAGE_FOR_EXTRA_PACE) {
+            targetShift -= HQ_OUTBID_EXTRA_TARGET_SHIFT;
+            targetPace += HQ_OUTBID_EXTRA_TARGET_PACE;
         }
 
         state.thresholdShift = approach(state.thresholdShift, targetShift, CONTROL_STEP);
@@ -172,6 +197,34 @@ public final class PacingController {
         state.lastBlockWinRate = winRate;
         state.lastBlockAvgWinCost = avgWinCost;
         state.crowdingPressure = classifyCrowdingPressure(enteredWithBid, winRate);
+
+        int premiumIndex = RoundQualityBucket.PREMIUM.index();
+        int goodIndex = RoundQualityBucket.GOOD.index();
+        int mediocreIndex = RoundQualityBucket.MEDIOCRE.index();
+
+        int premiumEntered = state.diagnosticsBlockEnteredByBucket[premiumIndex];
+        int premiumWins = state.diagnosticsBlockWinsByBucket[premiumIndex];
+        int goodRounds = state.diagnosticsBlockRoundsByBucket[goodIndex];
+        int goodEntered = state.diagnosticsBlockEnteredByBucket[goodIndex];
+        int goodWins = state.diagnosticsBlockWinsByBucket[goodIndex];
+        int mediocreRounds = state.diagnosticsBlockRoundsByBucket[mediocreIndex];
+        int mediocreEntered = state.diagnosticsBlockEnteredByBucket[mediocreIndex];
+
+        int highQualityEntered = premiumEntered + goodEntered;
+        int highQualityWins = premiumWins + goodWins;
+        double highQualityWinRate = safeRatio(highQualityWins, highQualityEntered);
+        double goodEntryRate = safeRatio(goodEntered, goodRounds);
+        double goodWinRate = safeRatio(goodWins, goodEntered);
+        double mediocreEntryRate = safeRatio(mediocreEntered, mediocreRounds);
+
+        state.lastBlockHighQualityEntered = highQualityEntered;
+        state.lastBlockHighQualityWins = highQualityWins;
+        state.lastBlockHighQualityWinRate = highQualityWinRate;
+        state.lastBlockGoodEntered = goodEntered;
+        state.lastBlockGoodWinRate = goodWinRate;
+        state.lastBlockMediocreEntryRate = mediocreEntryRate;
+
+        updateHighQualityOutbidStage(state, highQualityEntered, highQualityWins, highQualityWinRate, goodEntryRate);
 
         double participationRate = (double) state.blockEnteredRounds / 100.0;
         state.lastBlockParticipationRate = participationRate;
@@ -241,6 +294,70 @@ public final class PacingController {
         return CrowdingPressure.HIGH;
     }
 
+    private static void updateHighQualityOutbidStage(
+            BidRuntimeState state,
+            int highQualityEntered,
+            int highQualityWins,
+            double highQualityWinRate,
+            double goodEntryRate
+    ) {
+        boolean outbidTrigger = highQualityEntered >= HQ_OUTBID_MIN_ENTERED
+                && highQualityWinRate < HQ_OUTBID_MAX_WIN_RATE
+                && goodEntryRate >= HQ_OUTBID_MIN_GOOD_ENTRY_RATE;
+
+        if (outbidTrigger) {
+            state.consecutiveHighQualityOutbidBlocks++;
+            state.highQualityRecoveryStreakBlocks = 0;
+            state.highQualityRecoveryStreakHasStrong = false;
+
+            int stageIncrease = 1;
+            boolean severeOutbid = highQualityWins == 0
+                    && highQualityEntered >= HQ_OUTBID_SEVERE_ZERO_WIN_MIN_ENTERED;
+            if (severeOutbid) {
+                stageIncrease++;
+            }
+
+            state.highQualityOutbidStage = Math.min(
+                    HQ_OUTBID_STAGE_CAP,
+                    state.highQualityOutbidStage + stageIncrease
+            );
+            return;
+        }
+
+        state.consecutiveHighQualityOutbidBlocks = 0;
+
+        boolean strongRecoveryBlock = highQualityWinRate >= HQ_OUTBID_STRONG_RECOVERY_WIN_RATE;
+        boolean recoveryBlock = highQualityWinRate >= HQ_OUTBID_RECOVERY_WIN_RATE;
+
+        if (!recoveryBlock) {
+            state.highQualityRecoveryStreakBlocks = 0;
+            state.highQualityRecoveryStreakHasStrong = false;
+            return;
+        }
+
+        state.highQualityRecoveryStreakBlocks++;
+        if (strongRecoveryBlock) {
+            state.highQualityRecoveryStreakHasStrong = true;
+        }
+
+        boolean resetStage = state.highQualityRecoveryStreakHasStrong
+                && state.highQualityRecoveryStreakBlocks >= HQ_OUTBID_RECOVERY_STREAK_BLOCKS_TO_RESET;
+        if (resetStage) {
+            state.highQualityOutbidStage = 0;
+            state.highQualityRecoveryProbeCounter = 0;
+            state.highQualityRecoveryStreakBlocks = 0;
+            state.highQualityRecoveryStreakHasStrong = false;
+            return;
+        }
+
+        state.highQualityOutbidStage = Math.max(0, state.highQualityOutbidStage - 1);
+        if (state.highQualityOutbidStage == 0) {
+            state.highQualityRecoveryProbeCounter = 0;
+            state.highQualityRecoveryStreakBlocks = 0;
+            state.highQualityRecoveryStreakHasStrong = false;
+        }
+    }
+
     private static PaceBand increaseBand(PaceBand band) {
         if (band == PaceBand.GREEN) {
             return PaceBand.YELLOW;
@@ -281,5 +398,12 @@ public final class PacingController {
             return Math.max(target, current - step);
         }
         return current;
+    }
+
+    private static double safeRatio(int numerator, int denominator) {
+        if (denominator <= 0) {
+            return 0.0;
+        }
+        return (double) numerator / (double) denominator;
     }
 }

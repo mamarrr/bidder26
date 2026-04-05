@@ -124,12 +124,32 @@ public class BidCalculator {
         startBid = competitionPressureBid.startBid();
         maxBid = competitionPressureBid.maxBid();
 
+        Bid highQualityRecoveryBid = BidAdjustmentPolicy.applyHighQualityOutbidRecovery(
+                STATE,
+                new Bid(startBid, maxBid),
+                totalScore,
+                matchScore,
+                engagementScore,
+                video,
+                viewer
+        );
+        startBid = highQualityRecoveryBid.startBid();
+        maxBid = highQualityRecoveryBid.maxBid();
+
         startBid = (int) Math.floor(startBid * STATE.paceMultiplier);
         maxBid = (int) Math.floor(maxBid * STATE.paceMultiplier);
 
         Bid safeBid = BidSanitizer.sanitizeBid(startBid, maxBid, STATE.remainingBudget);
         STATE.lastDecidedBid = safeBid;
-        BidDiagnostics.updateDecisionDiagnostics(STATE, totalScore, safeBid);
+        BidDiagnostics.updateDecisionDiagnostics(
+                STATE,
+                totalScore,
+                matchScore,
+                engagementScore,
+                video,
+                viewer,
+                safeBid
+        );
         PacingController.updatePacingState(STATE, safeBid);
 
         return safeBid;
@@ -144,6 +164,8 @@ public class BidCalculator {
     }
 
     public void onBidResult(boolean won, int ebucksSpent) {
+        BidDiagnostics.updateResultDiagnostics(STATE, won);
+
         if (STATE.lastDecidedBid.maxBid() > 0) {
             STATE.blockEnteredWithBid++;
             if (won) {

@@ -1,5 +1,6 @@
 package bidder.state;
 
+import bidder.diagnostics.RoundQualityBucket;
 import bidder.pacing.PaceBand;
 import bidder.pacing.CrowdingPressure;
 import domain.Bid;
@@ -28,6 +29,13 @@ public class BidRuntimeState {
     public int blockTailScoreCount = 0;
     public int blockBidMaxSum = 0;
     public int blockBidEnteredCount = 0;
+    public int[] diagnosticsBlockRoundsByBucket = new int[RoundQualityBucket.values().length];
+    public int[] diagnosticsBlockEnteredByBucket = new int[RoundQualityBucket.values().length];
+    public int[] diagnosticsBlockWinsByBucket = new int[RoundQualityBucket.values().length];
+    public int[] diagnosticsBlockLossesByBucket = new int[RoundQualityBucket.values().length];
+    public int[] diagnosticsBlockEnteredMaxSumByBucket = new int[RoundQualityBucket.values().length];
+    public RoundQualityBucket diagnosticsLastRoundBucket = RoundQualityBucket.LOW;
+    public boolean diagnosticsLastRoundEntered = false;
 
     public double lastBlockParticipationRate = 0.0;
     public int lastBlockEnteredWithBid = 0;
@@ -35,6 +43,20 @@ public class BidRuntimeState {
     public int lastBlockLossesWithBid = 0;
     public double lastBlockWinRate = 0.0;
     public double lastBlockAvgWinCost = 0.0;
+    public int lastBlockHighQualityEntered = 0;
+    public int lastBlockHighQualityWins = 0;
+    public double lastBlockHighQualityWinRate = 0.0;
+    public int lastBlockGoodEntered = 0;
+    public double lastBlockGoodWinRate = 0.0;
+    public double lastBlockMediocreEntryRate = 0.0;
+    public int consecutiveHighQualityOutbidBlocks = 0;
+    public int highQualityOutbidStage = 0;
+    public int highQualityRecoveryStreakBlocks = 0;
+    public boolean highQualityRecoveryStreakHasStrong = false;
+    public int highQualityRecoveryProbeCounter = 0;
+    public boolean highQualityRecoveryBoostActive = false;
+    public boolean highQualityStagnationOverrideActive = false;
+    public int highQualityStagnationRounds = 0;
     public CrowdingPressure crowdingPressure = CrowdingPressure.LOW;
     public double lastLagRatio = 0.0;
     public double lastTailScore = 0.0;

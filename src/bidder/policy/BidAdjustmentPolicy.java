@@ -1,6 +1,26 @@
 package bidder.policy;
 
 import static bidder.config.BidStrategyConfig.CHOSEN_CATEGORY;
+import static bidder.config.BidStrategyConfig.HQ_OUTBID_STAGE_CAP;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_GOOD_MIN_MAX_BY_STAGE;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_GOOD_MIN_START_RATIO_BY_STAGE;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_GOOD_PROBE_MAX_INCREMENT;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_GOOD_PROBE_MIN_START_RATIO;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_PREMIUM_MIN_MAX_BY_STAGE;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_PREMIUM_MIN_START_RATIO_BY_STAGE;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_PREMIUM_PROBE_MAX_INCREMENT;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_PREMIUM_PROBE_MIN_START_RATIO;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_PROBE_CADENCE;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_PROBE_MIN_STAGE;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_STAGNATION_GOOD_MIN_MAX;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_STAGNATION_GOOD_MIN_START_RATIO;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_STAGNATION_GOOD_PROBE_MAX_INCREMENT;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_STAGNATION_MIN_CONSECUTIVE_BLOCKS;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_STAGNATION_MIN_LAG_RATIO;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_STAGNATION_PREMIUM_MIN_MAX;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_STAGNATION_PREMIUM_MIN_START_RATIO;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_STAGNATION_PREMIUM_PROBE_MAX_INCREMENT;
+import static bidder.config.BidStrategyConfig.HQ_RECOVERY_STAGNATION_PROBE_CADENCE;
 import static bidder.config.BidStrategyConfig.MATCH_VIDEO_WEIGHT;
 import static bidder.config.BidStrategyConfig.MIN_ENGAGEMENT_FALLBACK_FOR_LAG_BID;
 import static bidder.config.BidStrategyConfig.MIN_MATCH_SCORE_FOR_LAG_BID;
@@ -317,6 +337,112 @@ public final class BidAdjustmentPolicy {
         return new Bid(adjustedStart, adjustedMax);
     }
 
+    public static Bid applyHighQualityOutbidRecovery(
+            BidRuntimeState state,
+            Bid bid,
+            double score,
+            double matchScore,
+            double engagementScore,
+            Video video,
+            Viewer viewer
+    ) {
+        if (state.highQualityOutbidStage <= 0 || state.trackedSpent >= floorBudget(state)) {
+            if (state.highQualityOutbidStage < HQ_RECOVERY_PROBE_MIN_STAGE) {
+                state.highQualityRecoveryProbeCounter = 0;
+            }
+            return bid;
+        }
+
+        if (video == null || viewer == null) {
+            return bid;
+        }
+
+        boolean premiumRound = isPremiumRound(video, viewer, engagementScore);
+        boolean goodRound = !premiumRound && isGoodRound(score, matchScore, engagementScore);
+        if (!premiumRound && !goodRound) {
+            return bid;
+        }
+
+        int stage = Math.max(1, Math.min(HQ_OUTBID_STAGE_CAP, state.highQualityOutbidStage));
+        int stageIndex = stage - 1;
+
+        int adjustedStart = bid.startBid();
+        int adjustedMax = bid.maxBid();
+        boolean stagnationOverride = isHighQualityStagnationOverride(state);
+
+        int minMaxFloor = premiumRound
+                ? HQ_RECOVERY_PREMIUM_MIN_MAX_BY_STAGE[stageIndex]
+                : HQ_RECOVERY_GOOD_MIN_MAX_BY_STAGE[stageIndex];
+        double minStartRatio = premiumRound
+                ? HQ_RECOVERY_PREMIUM_MIN_START_RATIO_BY_STAGE[stageIndex]
+                : HQ_RECOVERY_GOOD_MIN_START_RATIO_BY_STAGE[stageIndex];
+
+        if (stagnationOverride) {
+            int stagnationFloor = premiumRound
+                    ? HQ_RECOVERY_STAGNATION_PREMIUM_MIN_MAX
+                    : HQ_RECOVERY_STAGNATION_GOOD_MIN_MAX;
+            double stagnationStartRatio = premiumRound
+                    ? HQ_RECOVERY_STAGNATION_PREMIUM_MIN_START_RATIO
+                    : HQ_RECOVERY_STAGNATION_GOOD_MIN_START_RATIO;
+            minMaxFloor = Math.max(minMaxFloor, stagnationFloor);
+            minStartRatio = Math.max(minStartRatio, stagnationStartRatio);
+        }
+
+        adjustedMax = Math.max(adjustedMax, minMaxFloor);
+        adjustedStart = enforceStartRatio(adjustedStart, adjustedMax, minStartRatio);
+
+        boolean probeActive = false;
+        int probeCadence = stagnationOverride
+                ? HQ_RECOVERY_STAGNATION_PROBE_CADENCE
+                : HQ_RECOVERY_PROBE_CADENCE;
+        if (stage >= HQ_RECOVERY_PROBE_MIN_STAGE && probeCadence > 0) {
+            state.highQualityRecoveryProbeCounter++;
+            if (state.highQualityRecoveryProbeCounter >= probeCadence) {
+                probeActive = true;
+                state.highQualityRecoveryProbeCounter = 0;
+            }
+        } else {
+            state.highQualityRecoveryProbeCounter = 0;
+        }
+
+        if (probeActive) {
+            int probeIncrement;
+            double probeStartRatio;
+            if (stagnationOverride) {
+                probeIncrement = premiumRound
+                        ? HQ_RECOVERY_STAGNATION_PREMIUM_PROBE_MAX_INCREMENT
+                        : HQ_RECOVERY_STAGNATION_GOOD_PROBE_MAX_INCREMENT;
+                probeStartRatio = premiumRound
+                        ? HQ_RECOVERY_STAGNATION_PREMIUM_MIN_START_RATIO
+                        : HQ_RECOVERY_STAGNATION_GOOD_MIN_START_RATIO;
+            } else {
+                probeIncrement = premiumRound
+                        ? HQ_RECOVERY_PREMIUM_PROBE_MAX_INCREMENT
+                        : HQ_RECOVERY_GOOD_PROBE_MAX_INCREMENT;
+                probeStartRatio = premiumRound
+                        ? HQ_RECOVERY_PREMIUM_PROBE_MIN_START_RATIO
+                        : HQ_RECOVERY_GOOD_PROBE_MIN_START_RATIO;
+            }
+            adjustedMax += probeIncrement;
+            adjustedStart = enforceStartRatio(adjustedStart, adjustedMax, probeStartRatio);
+        }
+
+        if (premiumRound && stage == HQ_OUTBID_STAGE_CAP) {
+            adjustedStart = adjustedMax;
+        }
+
+        if (adjustedStart > adjustedMax) {
+            adjustedStart = adjustedMax;
+        }
+
+        state.highQualityRecoveryBoostActive = true;
+        if (stagnationOverride) {
+            state.highQualityStagnationOverrideActive = true;
+            state.highQualityStagnationRounds++;
+        }
+        return new Bid(adjustedStart, adjustedMax);
+    }
+
     public static Bid applyMinimalLateCatchUp(
             BidRuntimeState state,
             Bid bid,
@@ -394,6 +520,17 @@ public final class BidAdjustmentPolicy {
                 && topInterestMatch
                 && viewer.subscribed() == ViewerSubscribed.Y
                 && engagementScore >= 1.2;
+    }
+
+    private static boolean isHighQualityStagnationOverride(BidRuntimeState state) {
+        return state.highQualityOutbidStage >= HQ_OUTBID_STAGE_CAP
+                && state.consecutiveHighQualityOutbidBlocks >= HQ_RECOVERY_STAGNATION_MIN_CONSECUTIVE_BLOCKS
+                && state.lastLagRatio >= HQ_RECOVERY_STAGNATION_MIN_LAG_RATIO;
+    }
+
+    private static boolean isGoodRound(double score, double matchScore, double engagementScore) {
+        return score >= 6.4
+                || (matchScore >= MATCH_VIDEO_WEIGHT && engagementScore >= 1.0);
     }
 
     private static Category[] extractInterests(ViewerInterests viewerInterests) {
